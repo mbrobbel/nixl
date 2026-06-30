@@ -537,6 +537,27 @@ fn sync_dir(
     Ok(())
 }
 
+/// Remove meson's extracted subproject directories (and wrap lock) under
+/// `<stage>/subprojects` so a changed wrap/patch is re-applied, while keeping
+/// `packagecache` (downloaded tarballs) and `packagefiles` (local patches) so
+/// re-extraction does not re-download.
+fn purge_extracted_subprojects(subprojects: &std::path::Path) {
+    let _ = std::fs::remove_file(subprojects.join(".wraplock"));
+    let Ok(entries) = std::fs::read_dir(subprojects) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == "packagecache" || name == "packagefiles" {
+            continue;
+        }
+        // Extracted subproject sources are directories; wrap files are kept.
+        if entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Environment variables that influence meson's compiler/dependency discovery.
 /// Meson captures these only at initial `setup`, so a change must invalidate the
 /// cached build; they are tracked for rerun and folded into the fingerprint.
@@ -608,9 +629,16 @@ fn build_from_source() -> anyhow::Result<PathBuf> {
     let cuda_inc = env::var("NIXL_CUDA_INC_PATH").unwrap_or_default();
     let cuda_lib = env::var("NIXL_CUDA_LIB_PATH").unwrap_or_default();
 
-    // Fingerprint the configuration; when it changes, wipe the stage and build
-    // dirs so stale options don't linger. (The install prefix is always recreated
-    // below, so removed/disabled plugin DSOs never survive a rebuild either.)
+    // Two fingerprints with different invalidation scopes:
+    //  - wrap signature (source + wrap/patch inputs): a change must re-apply the
+    //    affected subprojects, so purge meson's *extracted* dirs (keeping
+    //    packagecache so re-extraction needs no re-download);
+    //  - full config (the above plus options + toolchain env): a change forces a
+    //    clean meson reconfigure.
+    // The install prefix is always recreated before install, so removed/disabled
+    // plugin DSOs never survive a rebuild either.
+    let wraps_hash = hash_wrap_inputs(&subprojects);
+    let wrap_sig = format!("src={}\nwraps={:016x}\n", src.display(), wraps_hash);
     let mut config = format!(
         "src={}\nplugins={}\nucx={}\ncuda_inc={}\ncuda_lib={}\nwraps={:016x}\n",
         src.display(),
@@ -618,17 +646,24 @@ fn build_from_source() -> anyhow::Result<PathBuf> {
         ucx_path,
         cuda_inc,
         cuda_lib,
-        hash_wrap_inputs(&subprojects)
+        wraps_hash
     );
     // Fold meson's compiler/dependency discovery environment into the
     // fingerprint so a toolchain/search-path change re-runs setup.
     for var in MESON_ENV_VARS {
         config.push_str(&format!("{}={}\n", var, env::var(var).unwrap_or_default()));
     }
-    let fingerprint_file = out_dir.join("nixl-config.fingerprint");
-    let config_changed = std::fs::read_to_string(&fingerprint_file).ok().as_deref() != Some(&config);
+    let config_file = out_dir.join("nixl-config.fingerprint");
+    let wraps_file = out_dir.join("nixl-wraps.fingerprint");
+    let config_changed = std::fs::read_to_string(&config_file).ok().as_deref() != Some(&config);
+    let wraps_changed = std::fs::read_to_string(&wraps_file).ok().as_deref() != Some(&wrap_sig);
+    if wraps_changed {
+        purge_extracted_subprojects(&stage.join("subprojects"));
+    }
     if config_changed {
-        let _ = std::fs::remove_dir_all(&stage);
+        // Wipe only the meson build dir to force a clean reconfigure. The stage
+        // and its downloaded subprojects are kept (stage_source resyncs the
+        // source incrementally) so a routine config change does not re-download.
         let _ = std::fs::remove_dir_all(&build_dir);
     }
 
@@ -664,11 +699,12 @@ fn build_from_source() -> anyhow::Result<PathBuf> {
 
     run_command(&mut setup, "meson setup")?;
 
-    // Record the fingerprint once setup succeeds (i.e. wrap subprojects are
+    // Record both fingerprints once setup succeeds (i.e. wrap subprojects are
     // downloaded/extracted). A later compile/install failure then leaves the
     // config "unchanged", so a retry preserves the stage and its downloads
     // instead of wiping and re-downloading them (which would break offline).
-    std::fs::write(&fingerprint_file, &config)?;
+    std::fs::write(&config_file, &config)?;
+    std::fs::write(&wraps_file, &wrap_sig)?;
 
     // Bound ninja's parallelism to Cargo's job limit (NUM_JOBS) so a heavy CUDA
     // build does not oversubscribe the machine when the caller passed --jobs.
