@@ -76,5 +76,10 @@ fi
 # test stubs build
 cargo build --jobs "$NPROC" --features stub-api
 
+# Vendor the NIXL C++ sources so the packaged crate carries them (vendor/ is
+# gitignored and only present after this step); otherwise the archive would omit
+# them and a standalone build-from-source build would fail.
+./src/bindings/rust/vendor-nixl.sh
+
 cargo package
 

@@ -14,4 +14,6 @@
 # limitations under the License.
 
 subdir('cpp')
-subdir('python')
+if get_option('build_python')
+  subdir('python')
+endif

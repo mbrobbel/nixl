@@ -33,8 +33,11 @@ nixl_common_deps = [
 git_hash = run_command('git', 'rev-parse', '--short=8', 'HEAD', check: false, capture: true)
 git_commit = git_hash.returncode() == 0 ? git_hash.stdout().strip() : 'unknown'
 
-# Define a shared library for common utilities
-nixl_common_lib = shared_library('nixl_common',
+# Common utilities library. Uses library() (not shared_library) so a
+# --default-library=static build produces a static nixl_common alongside the
+# already-library() nixl/nixl_build, enabling fully static nixl builds; the
+# project default (default_library=shared) keeps this shared by default.
+nixl_common_lib = library('nixl_common',
     'hw_info.cpp',
     'nixl_log.cpp',
     'uuid_v4.cpp',

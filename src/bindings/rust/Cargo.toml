@@ -25,9 +25,28 @@ homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
+# Explicit package contents. `vendor/` (the bundled nixl C++ sources, populated
+# by vendor-nixl.sh before publishing) is gitignored, so it is listed here to be
+# included in the published crate for offline `build-from-source` builds.
+include = [
+    "build.rs",
+    "wrapper.cpp",
+    "wrapper.h",
+    "stubs.cpp",
+    "meson.build",
+    "rust-toolchain.toml",
+    "README.md",
+    "src/**/*",
+    "tests/**/*",
+    "vendor/**/*",
+]
 
 [features]
 stub-api = []
+# Build the nixl C++ libraries from source with meson into OUT_DIR instead of
+# linking an already-installed nixl. Takes precedence over `stub-api` if both
+# are enabled (e.g. via feature unification).
+build-from-source = []
 
 [dependencies]
 thiserror = { version = "2" }

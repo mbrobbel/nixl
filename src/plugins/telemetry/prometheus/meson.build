@@ -52,6 +52,10 @@ if prometheus_found
         install: true,
         install_dir: plugin_install_dir,
         name_prefix: '',
+        # The plugin is dlopen'd, so the process RUNPATH does not cover its
+        # transitive deps; point at the parent lib dir where the prometheus-cpp
+        # shared libraries (libcore/libpull) are installed.
+        install_rpath: '$ORIGIN/..',
     )
     message('Building Prometheus telemetry exporter plugin')
 else
